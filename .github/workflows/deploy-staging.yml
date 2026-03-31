@@ -1,0 +1,40 @@
+name: Deploy Staging
+on:
+  push:
+    branches: [staging]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        run: |
+          docker build -t ghcr.io/OWNER/hitl-test-backend:staging -f infra/docker/Dockerfile.backend .
+          docker build -t ghcr.io/OWNER/hitl-test-frontend:staging -f infra/docker/Dockerfile.frontend .
+          docker push ghcr.io/OWNER/hitl-test-backend:staging
+          docker push ghcr.io/OWNER/hitl-test-frontend:staging
+
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: deploy
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /app/hitl-test
+            docker compose pull
+            docker compose up -d --remove-orphans
+            sleep 10
+            curl -sf http://localhost:8000/health || (docker compose logs --tail 30 && exit 1)

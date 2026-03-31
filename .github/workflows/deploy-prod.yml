@@ -1,0 +1,48 @@
+name: Deploy Production
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "tag=$(git describe --tags --always)" >> $GITHUB_OUTPUT
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        run: |
+          docker build -t ghcr.io/OWNER/hitl-test-backend:${{ steps.version.outputs.tag }} -f infra/docker/Dockerfile.backend .
+          docker build -t ghcr.io/OWNER/hitl-test-frontend:${{ steps.version.outputs.tag }} -f infra/docker/Dockerfile.frontend .
+          docker push ghcr.io/OWNER/hitl-test-backend:${{ steps.version.outputs.tag }}
+          docker push ghcr.io/OWNER/hitl-test-frontend:${{ steps.version.outputs.tag }}
+          docker tag ghcr.io/OWNER/hitl-test-backend:${{ steps.version.outputs.tag }} ghcr.io/OWNER/hitl-test-backend:latest
+          docker tag ghcr.io/OWNER/hitl-test-frontend:${{ steps.version.outputs.tag }} ghcr.io/OWNER/hitl-test-frontend:latest
+          docker push ghcr.io/OWNER/hitl-test-backend:latest
+          docker push ghcr.io/OWNER/hitl-test-frontend:latest
+
+      - name: Deploy to production
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: deploy
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            cd /app/hitl-test
+            docker compose pull
+            docker compose up -d --remove-orphans
+            sleep 10
+            curl -sf http://localhost:8000/health || (docker compose logs --tail 30 && exit 1)
